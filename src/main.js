@@ -3,7 +3,7 @@ import jsQR from "jsqr";
 import "./style.css";
 
 const imageInput = document.querySelector("#qr-image");
-const qrisInput = document.querySelector("#qris-input");
+let qrisPayload = "";
 const amountInput = document.querySelector("#amount");
 const generateButton = document.querySelector("#generate");
 const status = document.querySelector("#status");
@@ -158,6 +158,7 @@ imageInput.addEventListener("change", async () => {
   const [file] = imageInput.files;
   if (!file) return;
 
+  qrisPayload = "";
   status.className = "status";
   status.textContent = "Membaca gambar QRIS…";
   result.hidden = true;
@@ -165,10 +166,11 @@ imageInput.addEventListener("change", async () => {
   try {
     const payload = await decodeImage(file);
     validateQRIS(payload);
-    qrisInput.value = payload;
+    qrisPayload = payload;
     status.className = "status success";
     status.textContent = "QRIS berhasil dibaca.";
   } catch (error) {
+    qrisPayload = "";
     status.className = "status error";
     status.textContent = error.message;
   }
@@ -179,10 +181,10 @@ generateButton.addEventListener("click", async () => {
   result.hidden = true;
 
   try {
-    const payload = normalizePayload(qrisInput.value);
+    const payload = normalizePayload(qrisPayload);
     const amount = Number(amountInput.value);
 
-    if (!payload) throw new Error("Unggah gambar atau masukkan payload QRIS.");
+    if (!payload) throw new Error("Unggah gambar QRIS dan tunggu sampai berhasil dibaca.");
     if (!Number.isInteger(amount) || amount < 1 || amount > 10_000_000) {
       throw new Error("Nominal harus Rp1 sampai Rp10.000.000 tanpa desimal.");
     }
