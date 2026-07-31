@@ -95,19 +95,59 @@ function convertToDynamic(payload, amount) {
   return body + crc16(body);
 }
 
-async function decodeImage(file) {
-  const bitmap = await createImageBitmap(file);
-  const temp = document.createElement("canvas");
-  temp.width = bitmap.width;
-  temp.height = bitmap.height;
-  const context = temp.getContext("2d", { willReadFrequently: true });
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
 
-  const pixels = context.getImageData(0, 0, temp.width, temp.height);
-  const decoded = jsQR(pixels.data, pixels.width, pixels.height);
-  if (!decoded?.data) throw new Error("QR tidak terbaca. Gunakan gambar yang lebih jelas.");
-  return decoded.data;
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("File gambar tidak dapat dibuka."));
+    };
+    image.src = url;
+  });
+}
+
+function scanWithJsQR(image, maximumSize) {
+  const ratio = Math.min(1, maximumSize / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * ratio));
+  const height = Math.max(1, Math.round(image.naturalHeight * ratio));
+  const temp = document.createElement("canvas");
+  temp.width = width;
+  temp.height = height;
+
+  const context = temp.getContext("2d", { willReadFrequently: true });
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, 0, 0, width, height);
+
+  const pixels = context.getImageData(0, 0, width, height);
+  return jsQR(pixels.data, width, height, { inversionAttempts: "attemptBoth" })?.data;
+}
+
+async function decodeImage(file) {
+  const image = await loadImage(file);
+
+  if ("BarcodeDetector" in window) {
+    try {
+      const detector = new BarcodeDetector({ formats: ["qr_code"] });
+      const [result] = await detector.detect(image);
+      if (result?.rawValue) return result.rawValue;
+    } catch {
+      // Lanjutkan ke pemindai jsQR jika BarcodeDetector tidak didukung penuh.
+    }
+  }
+
+  for (const size of [2400, 1800, 1200, 800]) {
+    const payload = scanWithJsQR(image, size);
+    if (payload) return payload;
+  }
+
+  throw new Error("QR tidak terbaca. Gunakan screenshot QRIS asli yang jelas dan tidak terpotong.");
 }
 
 imageInput.addEventListener("change", async () => {
