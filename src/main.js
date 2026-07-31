@@ -20,7 +20,7 @@ function parseTLV(payload) {
     if (offset + 4 > payload.length) throw new Error("Struktur QRIS tidak lengkap.");
     const tag = payload.slice(offset, offset + 2);
     const lengthText = payload.slice(offset + 2, offset + 4);
-    if (!/^\\d{2}$/.test(tag) || !/^\\d{2}$/.test(lengthText)) {
+    if (!/^\d{2}$/.test(tag) || !/^\d{2}$/.test(lengthText)) {
       throw new Error("Struktur tag QRIS tidak valid.");
     }
 
@@ -54,7 +54,7 @@ function crc16(text) {
 }
 
 function normalizePayload(value) {
-  return value.replace(/\\s+/g, "").trim();
+  return value.replace(/\s+/g, "").trim();
 }
 
 function validateQRIS(payload) {
