@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f766e" />
+    <meta name="description" content="Buat QRIS dinamis dengan nominal pembayaran." />
+    <title>QRIS Dinamis</title>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <p class="eyebrow">Deposit manual</p>
+        <h1>QRIS Dinamis</h1>
+        <p class="subtitle">Unggah QRIS statis Anda, tentukan nominal, lalu unduh QRIS pembayaran.</p>
+      </header>
+
+      <section class="card">
+        <label for="qr-image">1. Unggah gambar QRIS statis</label>
+        <input id="qr-image" type="file" accept="image/png,image/jpeg,image/webp" />
+        <p class="hint">Atau tempel payload QRIS pada kolom berikut.</p>
+
+        <label for="qris-input">Payload QRIS</label>
+        <textarea id="qris-input" rows="5" placeholder="000201010211..."></textarea>
+
+        <label for="amount">2. Nominal pembayaran (Rupiah)</label>
+        <input id="amount" type="number" min="1" max="10000000" step="1" inputmode="numeric" placeholder="Contoh: 15000" />
+
+        <button id="generate" type="button">Buat QRIS Dinamis</button>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="result" class="card result" hidden>
+        <h2>QRIS siap dibayar</h2>
+        <p id="amount-label" class="amount"></p>
+        <canvas id="qr-output"></canvas>
+        <a id="download" class="download" download="qris-dinamis.png">Unduh QRIS</a>
+        <p class="warning">Periksa pembayaran pada mutasi aplikasi merchant. Jangan menyetujui hanya berdasarkan screenshot.</p>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
