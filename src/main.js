@@ -97,18 +97,15 @@ function convertToDynamic(payload, amount) {
 
 function loadImage(file) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(image);
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("File gambar tidak dapat dibaca."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("File gambar tidak dapat dibuka."));
+      image.src = String(reader.result);
     };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("File gambar tidak dapat dibuka."));
-    };
-    image.src = url;
+    reader.readAsDataURL(file);
   });
 }
 
@@ -142,7 +139,14 @@ async function decodeImage(file) {
     }
   }
 
-  for (const size of [2400, 1800, 1200, 800]) {
+  // Repo sumber memindai canvas pada ukuran asli. Batasi hanya untuk gambar
+  // yang sangat besar agar browser Android tidak kehabisan memori.
+  const largestSide = Math.max(image.naturalWidth, image.naturalHeight);
+  const sizes = largestSide <= 4096
+    ? [Number.POSITIVE_INFINITY, 2400, 1800, 1200, 800]
+    : [3200, 2400, 1800, 1200, 800];
+
+  for (const size of sizes) {
     const payload = scanWithJsQR(image, size);
     if (payload) return payload;
   }
