@@ -125,7 +125,7 @@ async function createGatePayOrder(request, env) {
 
   const amount = Number(input.base_amount);
   const reference = String(input.reference || "");
-  if (!Number.isSafeInteger(amount) || amount < 1_000 || amount > 10_000_000) {
+  if (!Number.isSafeInteger(amount) || amount < 1_000 || amount > 1_000_000) {
     return json({ ok: false, error: "invalid_amount" }, 400);
   }
   if (!/^deposit:\d+:\d+$/.test(reference)) {
@@ -140,10 +140,32 @@ async function createGatePayOrder(request, env) {
     },
     body: JSON.stringify({ base_amount: amount, reference, ttl_seconds: 900 }),
   });
-  const gatePayOrder = await gatePayResponse.json();
+  let gatePayOrder;
+  try {
+    gatePayOrder = await gatePayResponse.json();
+  } catch {
+    gatePayOrder = {};
+  }
   if (!gatePayResponse.ok || !gatePayOrder.id || !gatePayOrder.checkout_url) {
-    console.error(JSON.stringify({ event: "gatepay_create_order_failed", status: gatePayResponse.status }));
-    return json({ ok: false, error: "gatepay_order_failed" }, 502);
+    const upstreamMessage = String(
+      gatePayOrder.error || gatePayOrder.message || gatePayOrder.detail || "",
+    ).slice(0, 300);
+    console.error(
+      JSON.stringify({
+        event: "gatepay_create_order_failed",
+        status: gatePayResponse.status,
+        upstream_message: upstreamMessage || null,
+      }),
+    );
+    return json(
+      {
+        ok: false,
+        error: "gatepay_order_failed",
+        upstream_status: gatePayResponse.status,
+        upstream_message: upstreamMessage || null,
+      },
+      502,
+    );
   }
 
   return json({
