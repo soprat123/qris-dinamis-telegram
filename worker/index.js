@@ -168,17 +168,41 @@ async function createGatePayOrder(request, env) {
     );
   }
 
-  return json({
-    ok: true,
-    order: {
-      id: String(gatePayOrder.id),
-      status: String(gatePayOrder.status || "pending"),
-      base_amount: Number(gatePayOrder.base_amount || amount),
-      unique_amount: Number(gatePayOrder.unique_amount || amount),
-      checkout_url: String(gatePayOrder.checkout_url),
-      expires_in: Number(gatePayOrder.expires_in || 900),
-    },
-  });
+  const order = {
+    id: String(gatePayOrder.id),
+    status: String(gatePayOrder.status || "pending"),
+    base_amount: Number(gatePayOrder.base_amount || amount),
+    unique_amount: Number(gatePayOrder.unique_amount || amount),
+    checkout_url: String(gatePayOrder.checkout_url),
+    expires_in: Number(gatePayOrder.expires_in || 900),
+  };
+
+  if (env.TELEGRAM_BOT_TOKEN && env.ADMIN_TELEGRAM_ID) {
+    try {
+      await sendTelegramMessage(
+        env,
+        [
+          "🟡 Transaksi QRIS pending",
+          "",
+          `Order: ${order.id}`,
+          `Referensi: ${reference}`,
+          `Nominal saldo: Rp${formatRupiah(order.base_amount)}`,
+          `Total pembayaran: Rp${formatRupiah(order.unique_amount)}`,
+          `Checkout: ${order.checkout_url}`,
+        ].join("\\n"),
+      );
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "gatepay_order_pending_notification_failed",
+          order_id: order.id,
+          message: error.message,
+        }),
+      );
+    }
+  }
+
+  return json({ ok: true, order });
 }
 
 async function forwardPaidEvent(env, event) {
