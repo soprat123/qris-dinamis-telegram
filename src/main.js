@@ -54,7 +54,7 @@ function crc16(text) {
 }
 
 function normalizePayload(value) {
-  return value.replace(/\s+/g, "").trim();
+  return value.trim();
 }
 
 function validateQRIS(payload) {
