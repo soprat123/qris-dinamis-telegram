@@ -82,11 +82,16 @@ function formatPaidAt(unixSeconds) {
   }).format(new Date(Number(unixSeconds) * 1000));
 }
 
-export function formatTelegramMessage(event) {
+export function formatTelegramMessage(event, settlement = {}) {
   const reference = event.reference ? String(event.reference) : "-";
+  const user = settlement.user || {};
+  const username = user.username ? `@${String(user.username).replace(/^@/, "")}` : "-";
+  const telegramId = user.telegram_id ? String(user.telegram_id) : "-";
   return [
     "✅ Transaksi QRIS berhasil",
     "",
+    `Username: ${username}`,
+    `ID Telegram: ${telegramId}`,
     `Order: ${String(event.order_id)}`,
     `Referensi: ${reference}`,
     `Nominal: Rp${formatRupiah(event.unique_amount)}`,
@@ -125,6 +130,10 @@ async function createGatePayOrder(request, env) {
 
   const amount = Number(input.base_amount);
   const reference = String(input.reference || "");
+  const username = String(input.username || "").replace(/^@/, "").slice(0, 64);
+  const firstName = String(input.first_name || "").slice(0, 80);
+  const telegramId = String(input.telegram_id || "").slice(0, 32);
+  const displayUser = username ? `@${username}` : (firstName || "-");
   if (!Number.isSafeInteger(amount) || amount < 1_000 || amount > 1_000_000) {
     return json({ ok: false, error: "invalid_amount" }, 400);
   }
@@ -184,6 +193,8 @@ async function createGatePayOrder(request, env) {
         [
           "🟡 Transaksi QRIS pending",
           "",
+          `Pengguna: ${displayUser}`,
+          `ID Telegram: ${telegramId || "-"}`,
           `Order: ${order.id}`,
           `Referensi: ${reference}`,
           `Nominal saldo: Rp${formatRupiah(order.base_amount)}`,
@@ -225,7 +236,14 @@ async function forwardPaidEvent(env, event) {
       paid_at: Number(event.paid_at),
     }),
   });
+  let result = {};
+  try {
+    result = await response.json();
+  } catch {
+    // Status HTTP tetap diperiksa di bawah.
+  }
   if (!response.ok) throw new Error(`bikin_foto_http_${response.status}`);
+  return result;
 }
 
 async function handleGatePayWebhook(request, env) {
@@ -259,8 +277,8 @@ async function handleGatePayWebhook(request, env) {
     return json({ ok: false, error: "invalid_event" }, 400);
   }
 
-  await forwardPaidEvent(env, event);
-  await sendTelegramMessage(env, formatTelegramMessage(event));
+  const settlement = await forwardPaidEvent(env, event);
+  await sendTelegramMessage(env, formatTelegramMessage(event, settlement));
   console.log(JSON.stringify({ event: "gatepay_order_paid_notified", order_id: String(event.order_id) }));
   return json({ ok: true });
 }
