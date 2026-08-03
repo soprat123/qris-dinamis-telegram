@@ -189,7 +189,7 @@ async function createGatePayOrder(request, env) {
           `Nominal saldo: Rp${formatRupiah(order.base_amount)}`,
           `Total pembayaran: Rp${formatRupiah(order.unique_amount)}`,
           `Checkout: ${order.checkout_url}`,
-        ].join("\\n"),
+        ].join("\n"),
       );
     } catch (error) {
       console.error(
