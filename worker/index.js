@@ -100,16 +100,49 @@ export function formatTelegramMessage(event, settlement = {}) {
   ].join("\n");
 }
 
-async function sendTelegramMessage(env, message) {
-  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: env.ADMIN_TELEGRAM_ID, text: message }),
-  });
-  if (!response.ok) throw new Error(`telegram_http_${response.status}`);
+function getAdminTelegramIds(env) {
+  return [...new Set(
+    [env.ADMIN_TELEGRAM_ID, env.ADMIN2_TELEGRAM_ID]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  )];
+}
 
-  const result = await response.json();
-  if (!result.ok) throw new Error("telegram_rejected_message");
+async function sendTelegramMessage(env, message) {
+  const chatIds = getAdminTelegramIds(env);
+  if (!chatIds.length) throw new Error("telegram_admin_not_configured");
+
+  const results = await Promise.allSettled(
+    chatIds.map(async (chatId) => {
+      const response = await fetch(
+        `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text: message }),
+        },
+      );
+      if (!response.ok) throw new Error(`telegram_http_${response.status}`);
+
+      const result = await response.json();
+      if (!result.ok) throw new Error("telegram_rejected_message");
+      return chatId;
+    }),
+  );
+
+  const delivered = results.filter((result) => result.status === "fulfilled").length;
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.error(
+        JSON.stringify({
+          event: "telegram_admin_notification_failed",
+          chat_id: chatIds[index],
+          message: result.reason?.message || "unknown_error",
+        }),
+      );
+    }
+  });
+  if (!delivered) throw new Error("telegram_all_admin_notifications_failed");
 }
 
 async function createGatePayOrder(request, env) {
@@ -186,7 +219,7 @@ async function createGatePayOrder(request, env) {
     expires_in: Number(gatePayOrder.expires_in || 900),
   };
 
-  if (env.TELEGRAM_BOT_TOKEN && env.ADMIN_TELEGRAM_ID) {
+  if (env.TELEGRAM_BOT_TOKEN && getAdminTelegramIds(env).length) {
     try {
       await sendTelegramMessage(
         env,
@@ -247,7 +280,11 @@ async function forwardPaidEvent(env, event) {
 }
 
 async function handleGatePayWebhook(request, env) {
-  if (!env.GATEPAY_CALLBACK_SECRET || !env.TELEGRAM_BOT_TOKEN || !env.ADMIN_TELEGRAM_ID) {
+  if (
+    !env.GATEPAY_CALLBACK_SECRET ||
+    !env.TELEGRAM_BOT_TOKEN ||
+    !getAdminTelegramIds(env).length
+  ) {
     console.error(JSON.stringify({ event: "missing_required_secret" }));
     return json({ ok: false, error: "server_not_configured" }, 500);
   }
