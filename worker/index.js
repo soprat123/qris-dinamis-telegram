@@ -1,0 +1,152 @@
+const MAX_WEBHOOK_BYTES = 64 * 1024;
+
+function json(data, status = 200) {
+  return Response.json(data, {
+    status,
+    headers: { "cache-control": "no-store" },
+  });
+}
+
+async function readBodyLimited(request) {
+  const declaredLength = Number(request.headers.get("content-length") || 0);
+  if (declaredLength > MAX_WEBHOOK_BYTES) throw new Error("payload_too_large");
+
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_WEBHOOK_BYTES) {
+      await reader.cancel();
+      throw new Error("payload_too_large");
+    }
+    chunks.push(value);
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
+function hexToBytes(value) {
+  if (!/^[0-9a-f]{64}$/i.test(value)) return null;
+  return Uint8Array.from(value.match(/.{2}/g), (byte) => Number.parseInt(byte, 16));
+}
+
+export async function verifyGatePaySignature(rawBody, signature, secret) {
+  const signatureBytes = hexToBytes(signature || "");
+  if (!signatureBytes || !secret) return false;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  return crypto.subtle.verify("HMAC", key, signatureBytes, encoder.encode(rawBody));
+}
+
+function formatRupiah(value) {
+  return new Intl.NumberFormat("id-ID").format(Number(value));
+}
+
+function formatPaidAt(unixSeconds) {
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(new Date(Number(unixSeconds) * 1000));
+}
+
+export function formatTelegramMessage(event) {
+  const reference = event.reference ? String(event.reference) : "-";
+  return [
+    "✅ Transaksi QRIS berhasil",
+    "",
+    `Order: ${String(event.order_id)}`,
+    `Referensi: ${reference}`,
+    `Nominal: Rp${formatRupiah(event.unique_amount)}`,
+    `Nominal dasar: Rp${formatRupiah(event.base_amount)}`,
+    `Waktu: ${formatPaidAt(event.paid_at)} WIB`,
+  ].join("\n");
+}
+
+async function sendTelegramMessage(env, message) {
+  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: env.ADMIN_TELEGRAM_ID, text: message }),
+  });
+  if (!response.ok) throw new Error(`telegram_http_${response.status}`);
+
+  const result = await response.json();
+  if (!result.ok) throw new Error("telegram_rejected_message");
+}
+
+async function handleGatePayWebhook(request, env) {
+  if (!env.GATEPAY_CALLBACK_SECRET || !env.TELEGRAM_BOT_TOKEN || !env.ADMIN_TELEGRAM_ID) {
+    console.error(JSON.stringify({ event: "missing_required_secret" }));
+    return json({ ok: false, error: "server_not_configured" }, 500);
+  }
+
+  let rawBody;
+  try {
+    rawBody = await readBodyLimited(request);
+  } catch (error) {
+    if (error.message === "payload_too_large") return json({ ok: false, error: "payload_too_large" }, 413);
+    throw error;
+  }
+
+  const signature = request.headers.get("x-signature");
+  if (!(await verifyGatePaySignature(rawBody, signature, env.GATEPAY_CALLBACK_SECRET))) {
+    return json({ ok: false, error: "invalid_signature" }, 401);
+  }
+
+  let event;
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return json({ ok: false, error: "invalid_json" }, 400);
+  }
+
+  if (event.event !== "order.paid") return json({ ok: true, ignored: true });
+  if (!event.order_id || !Number.isFinite(Number(event.unique_amount)) || !Number.isFinite(Number(event.paid_at))) {
+    return json({ ok: false, error: "invalid_event" }, 400);
+  }
+
+  await sendTelegramMessage(env, formatTelegramMessage(event));
+  console.log(JSON.stringify({ event: "gatepay_order_paid_notified", order_id: String(event.order_id) }));
+  return json({ ok: true });
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/health" && request.method === "GET") {
+      return json({ ok: true, service: "qris-dinamis-telegram" });
+    }
+
+    if (url.pathname === "/webhook/gatepay") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      try {
+        return await handleGatePayWebhook(request, env);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "gatepay_webhook_failed", message: error.message }));
+        return json({ ok: false, error: "notification_failed" }, 502);
+      }
+    }
+
+    return env.ASSETS.fetch(request);
+  },
+};
