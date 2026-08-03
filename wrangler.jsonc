@@ -3,14 +3,24 @@
   "name": "qris-dinamis-telegram",
   "main": "./worker/index.js",
   "compatibility_date": "2026-08-03",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/webhook/*", "/internal/*", "/health"]
+    "run_worker_first": [
+      "/webhook/*",
+      "/internal/*",
+      "/health"
+    ]
   },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
+  },
+  "vars": {
+    "BIKIN_FOTO_URL": "https://bikin-foto.merapatsoprat.workers.dev"
   }
 }
