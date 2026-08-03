@@ -56,6 +56,20 @@ export async function verifyGatePaySignature(rawBody, signature, secret) {
   return crypto.subtle.verify("HMAC", key, signatureBytes, encoder.encode(rawBody));
 }
 
+export async function verifyInternalSecret(provided, expected) {
+  if (!provided || !expected) return false;
+  const encoder = new TextEncoder();
+  const [providedHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  const left = new Uint8Array(providedHash);
+  const right = new Uint8Array(expectedHash);
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
+  return difference === 0;
+}
+
 function formatRupiah(value) {
   return new Intl.NumberFormat("id-ID").format(Number(value));
 }
@@ -93,6 +107,81 @@ async function sendTelegramMessage(env, message) {
   if (!result.ok) throw new Error("telegram_rejected_message");
 }
 
+async function createGatePayOrder(request, env) {
+  if (!env.GATEPAY_API_KEY || !env.QRIS_INTERNAL_SECRET) {
+    return json({ ok: false, error: "server_not_configured" }, 500);
+  }
+  if (!(await verifyInternalSecret(request.headers.get("x-internal-secret"), env.QRIS_INTERNAL_SECRET))) {
+    return json({ ok: false, error: "unauthorized" }, 401);
+  }
+
+  let input;
+  try {
+    input = JSON.parse(await readBodyLimited(request));
+  } catch (error) {
+    if (error.message === "payload_too_large") return json({ ok: false, error: "payload_too_large" }, 413);
+    return json({ ok: false, error: "invalid_json" }, 400);
+  }
+
+  const amount = Number(input.base_amount);
+  const reference = String(input.reference || "");
+  if (!Number.isSafeInteger(amount) || amount < 1_000 || amount > 10_000_000) {
+    return json({ ok: false, error: "invalid_amount" }, 400);
+  }
+  if (!/^deposit:\d+:\d+$/.test(reference)) {
+    return json({ ok: false, error: "invalid_reference" }, 400);
+  }
+
+  const gatePayResponse = await fetch("https://gatepay.biz.id/api/orders", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": env.GATEPAY_API_KEY,
+    },
+    body: JSON.stringify({ base_amount: amount, reference, ttl_seconds: 900 }),
+  });
+  const gatePayOrder = await gatePayResponse.json();
+  if (!gatePayResponse.ok || !gatePayOrder.id || !gatePayOrder.checkout_url) {
+    console.error(JSON.stringify({ event: "gatepay_create_order_failed", status: gatePayResponse.status }));
+    return json({ ok: false, error: "gatepay_order_failed" }, 502);
+  }
+
+  return json({
+    ok: true,
+    order: {
+      id: String(gatePayOrder.id),
+      status: String(gatePayOrder.status || "pending"),
+      base_amount: Number(gatePayOrder.base_amount || amount),
+      unique_amount: Number(gatePayOrder.unique_amount || amount),
+      checkout_url: String(gatePayOrder.checkout_url),
+      expires_in: Number(gatePayOrder.expires_in || 900),
+    },
+  });
+}
+
+async function forwardPaidEvent(env, event) {
+  if (!env.BIKIN_FOTO_URL || !env.QRIS_INTERNAL_SECRET) throw new Error("internal_forward_not_configured");
+  const target = new URL("/internal/payment-paid", env.BIKIN_FOTO_URL);
+  if (target.protocol !== "https:") throw new Error("invalid_bikin_foto_url");
+
+  const response = await fetch(target, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-internal-secret": env.QRIS_INTERNAL_SECRET,
+    },
+    body: JSON.stringify({
+      event: "order.paid",
+      order_id: String(event.order_id),
+      reference: event.reference ? String(event.reference) : null,
+      base_amount: Number(event.base_amount),
+      unique_amount: Number(event.unique_amount),
+      paid_at: Number(event.paid_at),
+    }),
+  });
+  if (!response.ok) throw new Error(`bikin_foto_http_${response.status}`);
+}
+
 async function handleGatePayWebhook(request, env) {
   if (!env.GATEPAY_CALLBACK_SECRET || !env.TELEGRAM_BOT_TOKEN || !env.ADMIN_TELEGRAM_ID) {
     console.error(JSON.stringify({ event: "missing_required_secret" }));
@@ -124,6 +213,7 @@ async function handleGatePayWebhook(request, env) {
     return json({ ok: false, error: "invalid_event" }, 400);
   }
 
+  await forwardPaidEvent(env, event);
   await sendTelegramMessage(env, formatTelegramMessage(event));
   console.log(JSON.stringify({ event: "gatepay_order_paid_notified", order_id: String(event.order_id) }));
   return json({ ok: true });
@@ -144,6 +234,16 @@ export default {
       } catch (error) {
         console.error(JSON.stringify({ event: "gatepay_webhook_failed", message: error.message }));
         return json({ ok: false, error: "notification_failed" }, 502);
+      }
+    }
+
+    if (url.pathname === "/internal/orders") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      try {
+        return await createGatePayOrder(request, env);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "internal_order_failed", message: error.message }));
+        return json({ ok: false, error: "order_failed" }, 502);
       }
     }
 

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
-import { formatTelegramMessage, verifyGatePaySignature } from "../worker/index.js";
+import {
+  formatTelegramMessage,
+  verifyGatePaySignature,
+  verifyInternalSecret,
+} from "../worker/index.js";
 
 test("verifies GatePay HMAC and rejects a modified body", async () => {
   const secret = "callback-test-secret";
@@ -10,6 +14,11 @@ test("verifies GatePay HMAC and rejects a modified body", async () => {
 
   assert.equal(await verifyGatePaySignature(body, signature, secret), true);
   assert.equal(await verifyGatePaySignature(`${body} `, signature, secret), false);
+});
+
+test("verifies the shared internal secret", async () => {
+  assert.equal(await verifyInternalSecret("same-secret", "same-secret"), true);
+  assert.equal(await verifyInternalSecret("wrong-secret", "same-secret"), false);
 });
 
 test("formats a paid notification in WIB", () => {

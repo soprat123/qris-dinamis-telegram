@@ -7,7 +7,7 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/webhook/*", "/health"]
+    "run_worker_first": ["/webhook/*", "/internal/*", "/health"]
   },
   "observability": {
     "enabled": true,
