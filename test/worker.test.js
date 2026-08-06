@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 import {
+  convertToDynamic,
   formatTelegramMessage,
   verifyGatePaySignature,
   verifyInternalSecret,
 } from "../worker/index.js";
+
+const STATIC_QRIS = "0002010102115802ID6304A3CF";
 
 test("verifies GatePay HMAC and rejects a modified body", async () => {
   const secret = "callback-test-secret";
@@ -35,4 +38,17 @@ test("formats a paid notification in WIB", () => {
   assert.match(message, /Referensi: INV-001/);
   assert.match(message, /Nominal: Rp10\.237/);
   assert.match(message, /WIB/);
+});
+
+test("converts a static QRIS payload to a dynamic amount", () => {
+  const dynamic = convertToDynamic(STATIC_QRIS, 10_000);
+
+  assert.match(dynamic, /^000201010212/);
+  assert.match(dynamic, /540510000/);
+  assert.match(dynamic, /6304[0-9A-F]{4}$/);
+});
+
+test("rejects dynamic amounts outside the configured range", () => {
+  assert.throws(() => convertToDynamic(STATIC_QRIS, 999), /invalid_amount/);
+  assert.throws(() => convertToDynamic(STATIC_QRIS, 1_000_001), /invalid_amount/);
 });
