@@ -53,6 +53,12 @@ penambahan saldo tetap dilakukan admin secara manual.
 PNG dibuat langsung menggunakan Web APIs (`CompressionStream`) agar kompatibel dengan
 runtime Cloudflare Workers dan tidak bergantung pada renderer Node.js `QRCode.toBuffer()`.
 
+Tombol **Saya Sudah Bayar** pada bot Bikin Foto memanggil endpoint internal
+`/internal/manual-topup-notify`. Endpoint dilindungi `QRIS_INTERNAL_SECRET` dan
+mengirim notifikasi melalui bot transaksi kepada `ADMIN_TELEGRAM_ID` serta
+`ADMIN2_TELEGRAM_ID`. Notifikasi hanya meminta pemeriksaan mutasi; saldo tidak
+ditambahkan otomatis.
+
 ## Menjalankan secara lokal
 
 ```bash
