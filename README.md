@@ -10,6 +10,54 @@ Fondasi aplikasi QRIS dinamis untuk alur deposit yang diverifikasi manual melalu
 - Menambahkan nominal pembayaran
 - Membuat dan mengunduh QRIS dinamis
 - Berjalan sepenuhnya di browser
+- API privat untuk mengirim QRIS statis dan membuat QRIS dinamis di bot Telegram
+
+## API QRIS untuk bot Telegram
+
+Halaman web menyediakan alat setup lokal untuk membuat `QRIS_API_KEY` yang aman dan
+menyalin `QRIS_STATIC_PAYLOAD` setelah QRIS statis berhasil dipindai. Nilai tersebut
+tidak dikirim atau disimpan oleh halaman; admin tetap harus memasukkannya sebagai
+Worker Secrets.
+
+Tambahkan dua Worker Secret berikut sebelum deploy:
+
+```bash
+npx wrangler secret put QRIS_API_KEY
+npx wrangler secret put QRIS_STATIC_PAYLOAD
+```
+
+`QRIS_API_KEY` harus berupa key acak yang panjang dan hanya disimpan pada Worker bot.
+`QRIS_STATIC_PAYLOAD` adalah teks EMVCo yang dibaca dari QRIS merchant milik sendiri.
+
+Mengambil QRIS statis:
+
+```http
+GET /api/qris/static
+Authorization: Bearer <QRIS_API_KEY>
+```
+
+Membuat QRIS dinamis:
+
+```http
+POST /api/qris/dynamic
+Authorization: Bearer <QRIS_API_KEY>
+Content-Type: application/json
+
+{"amount":10000}
+```
+
+Kedua endpoint mengembalikan gambar `image/png`. Nominal dinamis yang diterima adalah
+Rp1.000 sampai Rp1.000.000. API ini hanya membuat QRIS; pemeriksaan pembayaran dan
+penambahan saldo tetap dilakukan admin secara manual.
+
+PNG dibuat langsung menggunakan Web APIs (`CompressionStream`) agar kompatibel dengan
+runtime Cloudflare Workers dan tidak bergantung pada renderer Node.js `QRCode.toBuffer()`.
+
+Tombol **Saya Sudah Bayar** pada bot Bikin Foto memanggil endpoint internal
+`/internal/manual-topup-notify`. Endpoint dilindungi `QRIS_INTERNAL_SECRET` dan
+mengirim notifikasi melalui bot transaksi kepada `ADMIN_TELEGRAM_ID` serta
+`ADMIN2_TELEGRAM_ID`. Notifikasi hanya meminta pemeriksaan mutasi; saldo tidak
+ditambahkan otomatis.
 
 ## Menjalankan secara lokal
 

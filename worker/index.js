@@ -1,4 +1,8 @@
+import QRCode from "qrcode";
+
 const MAX_WEBHOOK_BYTES = 64 * 1024;
+const MIN_QRIS_AMOUNT = 1_000;
+const MAX_QRIS_AMOUNT = 1_000_000;
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -68,6 +72,218 @@ export async function verifyInternalSecret(provided, expected) {
   let difference = 0;
   for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
   return difference === 0;
+}
+
+function parseTLV(payload) {
+  const items = [];
+  let offset = 0;
+
+  while (offset < payload.length) {
+    if (offset + 4 > payload.length) throw new Error("invalid_qris_payload");
+    const tag = payload.slice(offset, offset + 2);
+    const lengthText = payload.slice(offset + 2, offset + 4);
+    if (!/^\d{2}$/.test(tag) || !/^\d{2}$/.test(lengthText)) {
+      throw new Error("invalid_qris_payload");
+    }
+
+    const valueStart = offset + 4;
+    const valueEnd = valueStart + Number(lengthText);
+    if (valueEnd > payload.length) throw new Error("invalid_qris_payload");
+    items.push({ tag, value: payload.slice(valueStart, valueEnd) });
+    offset = valueEnd;
+  }
+
+  return items;
+}
+
+function encodeTLV(tag, value) {
+  const text = String(value);
+  if (text.length > 99) throw new Error("invalid_qris_payload");
+  return tag + String(text.length).padStart(2, "0") + text;
+}
+
+function crc16(text) {
+  let crc = 0xffff;
+  for (let index = 0; index < text.length; index += 1) {
+    crc ^= text.charCodeAt(index) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function validateQRIS(payload) {
+  const normalized = String(payload || "").trim();
+  const items = parseTLV(normalized);
+  const crcItem = items.at(-1);
+  if (!items.some((item) => item.tag === "00" && item.value === "01")) {
+    throw new Error("invalid_qris_payload");
+  }
+  if (!crcItem || crcItem.tag !== "63" || crcItem.value.length !== 4) {
+    throw new Error("invalid_qris_payload");
+  }
+  if (crc16(normalized.slice(0, -4)) !== crcItem.value.toUpperCase()) {
+    throw new Error("invalid_qris_payload");
+  }
+  return items;
+}
+
+export function convertToDynamic(payload, amount) {
+  if (!Number.isSafeInteger(amount) || amount < MIN_QRIS_AMOUNT || amount > MAX_QRIS_AMOUNT) {
+    throw new Error("invalid_amount");
+  }
+
+  const items = validateQRIS(payload)
+    .filter((item) => !["54", "63"].includes(item.tag))
+    .map((item) => item.tag === "01" ? { ...item, value: "12" } : item);
+  if (!items.some((item) => item.tag === "01")) {
+    items.splice(1, 0, { tag: "01", value: "12" });
+  }
+
+  const insertAt = items.findIndex((item) => Number(item.tag) > 54);
+  items.splice(insertAt === -1 ? items.length : insertAt, 0, {
+    tag: "54",
+    value: String(amount),
+  });
+  const body = items.map(({ tag, value }) => encodeTLV(tag, value)).join("") + "6304";
+  return body + crc16(body);
+}
+
+async function authorizeQrisApi(request, env) {
+  const authorization = request.headers.get("authorization") || "";
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
+  const provided = bearer || request.headers.get("x-api-key");
+  return verifyInternalSecret(provided, env.QRIS_API_KEY);
+}
+
+function uint32(value) {
+  return Uint8Array.of(
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  );
+}
+
+function concatBytes(...parts) {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data = new Uint8Array()) {
+  const typeBytes = new TextEncoder().encode(type);
+  const body = concatBytes(typeBytes, data);
+  return concatBytes(uint32(data.length), body, uint32(crc32(body)));
+}
+
+async function deflate(bytes) {
+  const compressed = new Blob([bytes])
+    .stream()
+    .pipeThrough(new CompressionStream("deflate"));
+  return new Uint8Array(await new Response(compressed).arrayBuffer());
+}
+
+export async function renderQrisPng(payload) {
+  const qr = QRCode.create(payload, { errorCorrectionLevel: "M" });
+  const moduleCount = qr.modules.size;
+  const margin = 4;
+  const scale = 8;
+  const width = (moduleCount + margin * 2) * scale;
+  const rows = new Uint8Array((width + 1) * width);
+  rows.fill(255);
+
+  for (let y = 0; y < width; y += 1) {
+    const rowStart = y * (width + 1);
+    rows[rowStart] = 0;
+    const moduleY = Math.floor(y / scale) - margin;
+    if (moduleY < 0 || moduleY >= moduleCount) continue;
+
+    for (let x = 0; x < width; x += 1) {
+      const moduleX = Math.floor(x / scale) - margin;
+      if (
+        moduleX >= 0 &&
+        moduleX < moduleCount &&
+        qr.modules.get(moduleX, moduleY)
+      ) {
+        rows[rowStart + x + 1] = 0;
+      }
+    }
+  }
+
+  const ihdr = new Uint8Array(13);
+  ihdr.set(uint32(width), 0);
+  ihdr.set(uint32(width), 4);
+  ihdr[8] = 8;
+  ihdr[9] = 0;
+  const signature = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10);
+  return concatBytes(
+    signature,
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", await deflate(rows)),
+    pngChunk("IEND"),
+  );
+}
+
+async function handleQrisApi(request, env, dynamic) {
+  if (!env.QRIS_API_KEY || !env.QRIS_STATIC_PAYLOAD) {
+    return json({ ok: false, error: "server_not_configured" }, 500);
+  }
+  if (!(await authorizeQrisApi(request, env))) {
+    return json({ ok: false, error: "unauthorized" }, 401);
+  }
+
+  let payload = String(env.QRIS_STATIC_PAYLOAD).trim();
+  try {
+    validateQRIS(payload);
+  } catch {
+    return json({ ok: false, error: "invalid_static_qris" }, 500);
+  }
+
+  let amount = null;
+  if (dynamic) {
+    let input;
+    try {
+      input = JSON.parse(await readBodyLimited(request));
+    } catch (error) {
+      if (error.message === "payload_too_large") return json({ ok: false, error: "payload_too_large" }, 413);
+      return json({ ok: false, error: "invalid_json" }, 400);
+    }
+    amount = Number(input.amount);
+    try {
+      payload = convertToDynamic(payload, amount);
+    } catch (error) {
+      if (error.message === "invalid_amount") return json({ ok: false, error: "invalid_amount" }, 400);
+      return json({ ok: false, error: "invalid_static_qris" }, 500);
+    }
+  }
+
+  const png = await renderQrisPng(payload);
+  return new Response(png, {
+    headers: {
+      "content-type": "image/png",
+      "content-disposition": `inline; filename="qris-${dynamic ? amount : "statis"}.png"`,
+      "cache-control": "no-store",
+      "x-qris-type": dynamic ? "dynamic" : "static",
+      ...(dynamic ? { "x-qris-amount": String(amount) } : {}),
+    },
+  });
 }
 
 function formatRupiah(value) {
@@ -143,6 +359,71 @@ async function sendTelegramMessage(env, message) {
     }
   });
   if (!delivered) throw new Error("telegram_all_admin_notifications_failed");
+}
+
+async function handleManualTopupNotification(request, env) {
+  if (
+    !env.QRIS_INTERNAL_SECRET ||
+    !env.TELEGRAM_BOT_TOKEN ||
+    !getAdminTelegramIds(env).length
+  ) {
+    return json({ ok: false, error: "server_not_configured" }, 500);
+  }
+  if (!(await verifyInternalSecret(
+    request.headers.get("x-internal-secret"),
+    env.QRIS_INTERNAL_SECRET,
+  ))) {
+    return json({ ok: false, error: "unauthorized" }, 401);
+  }
+
+  let input;
+  try {
+    input = JSON.parse(await readBodyLimited(request));
+  } catch (error) {
+    if (error.message === "payload_too_large") {
+      return json({ ok: false, error: "payload_too_large" }, 413);
+    }
+    return json({ ok: false, error: "invalid_json" }, 400);
+  }
+
+  const amount = Number(input.amount);
+  const telegramId = String(input.telegram_id || "").slice(0, 32);
+  const orderId = String(input.order_id || "").slice(0, 32);
+  const username = String(input.username || "")
+    .replace(/^@/, "")
+    .replace(/[^a-zA-Z0-9_]/g, "")
+    .slice(0, 32);
+  const firstName = String(input.first_name || "").replace(/[\r\n]/g, " ").slice(0, 80);
+  if (
+    !Number.isSafeInteger(amount) ||
+    amount < MIN_QRIS_AMOUNT ||
+    amount > MAX_QRIS_AMOUNT ||
+    !/^\d{1,32}$/.test(telegramId) ||
+    !/^\d{1,32}$/.test(orderId)
+  ) {
+    return json({ ok: false, error: "invalid_notification" }, 400);
+  }
+
+  await sendTelegramMessage(
+    env,
+    [
+      "🟡 PERIKSA PEMBAYARAN MANUAL",
+      "",
+      `Pengguna: ${firstName || "-"}`,
+      `Username: ${username ? `@${username}` : "-"}`,
+      `ID Telegram: ${telegramId}`,
+      `Order ID: #${orderId}`,
+      `Nominal: Rp${formatRupiah(amount)}`,
+      "",
+      "Periksa mutasi merchant. Jika pembayaran masuk, tambahkan saldo menggunakan command admin.",
+    ].join("\n"),
+  );
+  console.log(JSON.stringify({
+    event: "manual_topup_notification_sent",
+    order_id: orderId,
+    telegram_id: telegramId,
+  }));
+  return json({ ok: true });
 }
 
 async function createGatePayOrder(request, env) {
@@ -593,6 +874,26 @@ export default {
       return json({ ok: true, service: "qris-dinamis-telegram" });
     }
 
+    if (url.pathname === "/api/qris/static") {
+      if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
+      try {
+        return await handleQrisApi(request, env, false);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "qris_static_api_failed", message: error.message }));
+        return json({ ok: false, error: "qris_generation_failed" }, 500);
+      }
+    }
+
+    if (url.pathname === "/api/qris/dynamic") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      try {
+        return await handleQrisApi(request, env, true);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "qris_dynamic_api_failed", message: error.message }));
+        return json({ ok: false, error: "qris_generation_failed" }, 500);
+      }
+    }
+
     if (url.pathname === "/webhook/gatepay") {
       if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
       try {
@@ -610,6 +911,16 @@ export default {
       } catch (error) {
         console.error(JSON.stringify({ event: "internal_order_failed", message: error.message }));
         return json({ ok: false, error: "order_failed" }, 502);
+      }
+    }
+
+    if (url.pathname === "/internal/manual-topup-notify") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      try {
+        return await handleManualTopupNotification(request, env);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "manual_topup_notification_failed", message: error.message }));
+        return json({ ok: false, error: "notification_failed" }, 502);
       }
     }
 

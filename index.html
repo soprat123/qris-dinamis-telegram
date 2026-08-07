@@ -21,10 +21,33 @@
         <p class="hint">Setelah QRIS berhasil dibaca, lanjutkan dengan memasukkan nominal.</p>
 
         <label for="amount">2. Nominal pembayaran (Rupiah)</label>
-        <input id="amount" type="number" min="1" max="10000000" step="1" inputmode="numeric" placeholder="Contoh: 15000" />
+        <input id="amount" type="number" min="1000" max="1000000" step="1" inputmode="numeric" placeholder="Contoh: 15000" />
 
         <button id="generate" type="button">Buat QRIS Dinamis</button>
         <p id="status" class="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="card setup-card">
+        <p class="eyebrow">Setup bot Telegram</p>
+        <h2>Konfigurasi API QRIS</h2>
+        <p class="hint">Semua proses di bagian ini berjalan hanya di perangkat Anda. API key dan payload tidak dikirim atau disimpan oleh halaman ini.</p>
+
+        <label for="api-key">QRIS_API_KEY</label>
+        <div class="copy-field">
+          <input id="api-key" type="text" readonly placeholder="Tekan Buat API Key" autocomplete="off" spellcheck="false" />
+          <button id="copy-api-key" class="secondary-button" type="button" disabled>Salin</button>
+        </div>
+        <button id="generate-api-key" type="button">Buat API Key Aman</button>
+        <p class="hint">Masukkan hasilnya sebagai Secret bernama <code>QRIS_API_KEY</code> di Cloudflare.</p>
+
+        <div id="payload-setup" hidden>
+          <label for="static-payload">QRIS_STATIC_PAYLOAD</label>
+          <textarea id="static-payload" rows="5" readonly spellcheck="false"></textarea>
+          <button id="copy-payload" class="secondary-button full-button" type="button">Salin Payload QRIS</button>
+          <p class="hint">Masukkan hasilnya sebagai Secret bernama <code>QRIS_STATIC_PAYLOAD</code> di Cloudflare.</p>
+        </div>
+        <p id="setup-status" class="status" role="status" aria-live="polite"></p>
+        <p class="warning">Jangan kirim API key ke chat dan jangan simpan API key di GitHub.</p>
       </section>
 
       <section id="result" class="card result" hidden>

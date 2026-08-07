@@ -11,6 +11,55 @@ const result = document.querySelector("#result");
 const canvas = document.querySelector("#qr-output");
 const amountLabel = document.querySelector("#amount-label");
 const download = document.querySelector("#download");
+const apiKeyInput = document.querySelector("#api-key");
+const generateApiKeyButton = document.querySelector("#generate-api-key");
+const copyApiKeyButton = document.querySelector("#copy-api-key");
+const payloadSetup = document.querySelector("#payload-setup");
+const staticPayloadOutput = document.querySelector("#static-payload");
+const copyPayloadButton = document.querySelector("#copy-payload");
+const setupStatus = document.querySelector("#setup-status");
+
+function generateApiKey() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function copyText(value, successMessage) {
+  if (!value) return;
+
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const helper = document.createElement("textarea");
+    helper.value = value;
+    helper.setAttribute("readonly", "");
+    helper.style.position = "fixed";
+    helper.style.opacity = "0";
+    document.body.append(helper);
+    helper.select();
+    document.execCommand("copy");
+    helper.remove();
+  }
+
+  setupStatus.className = "status success";
+  setupStatus.textContent = successMessage;
+}
+
+generateApiKeyButton.addEventListener("click", () => {
+  apiKeyInput.value = generateApiKey();
+  copyApiKeyButton.disabled = false;
+  setupStatus.className = "status success";
+  setupStatus.textContent = "API key aman berhasil dibuat. Salin dan simpan sebagai Cloudflare Secret.";
+});
+
+copyApiKeyButton.addEventListener("click", () => {
+  copyText(apiKeyInput.value, "QRIS_API_KEY berhasil disalin.");
+});
+
+copyPayloadButton.addEventListener("click", () => {
+  copyText(staticPayloadOutput.value, "QRIS_STATIC_PAYLOAD berhasil disalin.");
+});
 
 function parseTLV(payload) {
   const items = [];
@@ -159,6 +208,8 @@ imageInput.addEventListener("change", async () => {
   if (!file) return;
 
   qrisPayload = "";
+  staticPayloadOutput.value = "";
+  payloadSetup.hidden = true;
   status.className = "status";
   status.textContent = "Membaca gambar QRIS…";
   result.hidden = true;
@@ -166,11 +217,15 @@ imageInput.addEventListener("change", async () => {
   try {
     const payload = await decodeImage(file);
     validateQRIS(payload);
-    qrisPayload = payload;
+    qrisPayload = normalizePayload(payload);
+    staticPayloadOutput.value = qrisPayload;
+    payloadSetup.hidden = false;
     status.className = "status success";
     status.textContent = "QRIS berhasil dibaca.";
   } catch (error) {
     qrisPayload = "";
+    staticPayloadOutput.value = "";
+    payloadSetup.hidden = true;
     status.className = "status error";
     status.textContent = error.message;
   }
@@ -185,8 +240,8 @@ generateButton.addEventListener("click", async () => {
     const amount = Number(amountInput.value);
 
     if (!payload) throw new Error("Unggah gambar QRIS dan tunggu sampai berhasil dibaca.");
-    if (!Number.isInteger(amount) || amount < 1 || amount > 10_000_000) {
-      throw new Error("Nominal harus Rp1 sampai Rp10.000.000 tanpa desimal.");
+    if (!Number.isInteger(amount) || amount < 1_000 || amount > 1_000_000) {
+      throw new Error("Nominal harus Rp1.000 sampai Rp1.000.000 tanpa desimal.");
     }
 
     const dynamicPayload = convertToDynamic(payload, amount);
