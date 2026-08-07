@@ -65,6 +65,33 @@ button, .download {
   cursor: pointer;
 }
 button:hover, .download:hover { background: #115e59; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+
+.setup-card h2 { margin: 0 0 8px; }
+.copy-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+.copy-field .secondary-button {
+  width: auto;
+  min-width: 84px;
+  margin-top: 0;
+}
+.secondary-button {
+  color: #0f766e;
+  background: #ccfbf1;
+}
+.secondary-button:hover { color: #fff; background: #0f766e; }
+.full-button { margin-top: 10px; }
+code {
+  border-radius: 5px;
+  padding: 2px 5px;
+  color: #115e59;
+  background: #ccfbf1;
+  font-size: .88em;
+}
 
 .status { min-height: 24px; margin: 14px 0 0; color: #526c68; }
 .status.success { color: #047857; }
@@ -87,4 +114,6 @@ button:hover, .download:hover { background: #115e59; }
 @media (max-width: 480px) {
   .container { width: min(100% - 20px, 680px); padding-top: 28px; }
   .card { border-radius: 18px; }
+  .copy-field { grid-template-columns: 1fr; }
+  .copy-field .secondary-button { width: 100%; }
 }
