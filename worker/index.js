@@ -361,6 +361,71 @@ async function sendTelegramMessage(env, message) {
   if (!delivered) throw new Error("telegram_all_admin_notifications_failed");
 }
 
+async function handleManualTopupNotification(request, env) {
+  if (
+    !env.QRIS_INTERNAL_SECRET ||
+    !env.TELEGRAM_BOT_TOKEN ||
+    !getAdminTelegramIds(env).length
+  ) {
+    return json({ ok: false, error: "server_not_configured" }, 500);
+  }
+  if (!(await verifyInternalSecret(
+    request.headers.get("x-internal-secret"),
+    env.QRIS_INTERNAL_SECRET,
+  ))) {
+    return json({ ok: false, error: "unauthorized" }, 401);
+  }
+
+  let input;
+  try {
+    input = JSON.parse(await readBodyLimited(request));
+  } catch (error) {
+    if (error.message === "payload_too_large") {
+      return json({ ok: false, error: "payload_too_large" }, 413);
+    }
+    return json({ ok: false, error: "invalid_json" }, 400);
+  }
+
+  const amount = Number(input.amount);
+  const telegramId = String(input.telegram_id || "").slice(0, 32);
+  const orderId = String(input.order_id || "").slice(0, 32);
+  const username = String(input.username || "")
+    .replace(/^@/, "")
+    .replace(/[^a-zA-Z0-9_]/g, "")
+    .slice(0, 32);
+  const firstName = String(input.first_name || "").replace(/[\r\n]/g, " ").slice(0, 80);
+  if (
+    !Number.isSafeInteger(amount) ||
+    amount < MIN_QRIS_AMOUNT ||
+    amount > MAX_QRIS_AMOUNT ||
+    !/^\d{1,32}$/.test(telegramId) ||
+    !/^\d{1,32}$/.test(orderId)
+  ) {
+    return json({ ok: false, error: "invalid_notification" }, 400);
+  }
+
+  await sendTelegramMessage(
+    env,
+    [
+      "🟡 PERIKSA PEMBAYARAN MANUAL",
+      "",
+      `Pengguna: ${firstName || "-"}`,
+      `Username: ${username ? `@${username}` : "-"}`,
+      `ID Telegram: ${telegramId}`,
+      `Order ID: #${orderId}`,
+      `Nominal: Rp${formatRupiah(amount)}`,
+      "",
+      "Periksa mutasi merchant. Jika pembayaran masuk, tambahkan saldo menggunakan command admin.",
+    ].join("\n"),
+  );
+  console.log(JSON.stringify({
+    event: "manual_topup_notification_sent",
+    order_id: orderId,
+    telegram_id: telegramId,
+  }));
+  return json({ ok: true });
+}
+
 async function createGatePayOrder(request, env) {
   if (!env.GATEPAY_API_KEY || !env.QRIS_INTERNAL_SECRET) {
     return json({ ok: false, error: "server_not_configured" }, 500);
@@ -846,6 +911,16 @@ export default {
       } catch (error) {
         console.error(JSON.stringify({ event: "internal_order_failed", message: error.message }));
         return json({ ok: false, error: "order_failed" }, 502);
+      }
+    }
+
+    if (url.pathname === "/internal/manual-topup-notify") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      try {
+        return await handleManualTopupNotification(request, env);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "manual_topup_notification_failed", message: error.message }));
+        return json({ ok: false, error: "notification_failed" }, 502);
       }
     }
 
