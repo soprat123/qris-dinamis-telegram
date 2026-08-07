@@ -50,6 +50,9 @@ Kedua endpoint mengembalikan gambar `image/png`. Nominal dinamis yang diterima a
 Rp1.000 sampai Rp1.000.000. API ini hanya membuat QRIS; pemeriksaan pembayaran dan
 penambahan saldo tetap dilakukan admin secara manual.
 
+PNG dibuat langsung menggunakan Web APIs (`CompressionStream`) agar kompatibel dengan
+runtime Cloudflare Workers dan tidak bergantung pada renderer Node.js `QRCode.toBuffer()`.
+
 ## Menjalankan secara lokal
 
 ```bash
