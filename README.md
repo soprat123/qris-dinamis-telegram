@@ -14,6 +14,11 @@ Fondasi aplikasi QRIS dinamis untuk alur deposit yang diverifikasi manual melalu
 
 ## API QRIS untuk bot Telegram
 
+Halaman web menyediakan alat setup lokal untuk membuat `QRIS_API_KEY` yang aman dan
+menyalin `QRIS_STATIC_PAYLOAD` setelah QRIS statis berhasil dipindai. Nilai tersebut
+tidak dikirim atau disimpan oleh halaman; admin tetap harus memasukkannya sebagai
+Worker Secrets.
+
 Tambahkan dua Worker Secret berikut sebelum deploy:
 
 ```bash
