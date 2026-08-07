@@ -157,14 +157,88 @@ async function authorizeQrisApi(request, env) {
   return verifyInternalSecret(provided, env.QRIS_API_KEY);
 }
 
-async function renderQrisPng(payload) {
-  return QRCode.toBuffer(payload, {
-    type: "png",
-    width: 640,
-    margin: 2,
-    errorCorrectionLevel: "M",
-    color: { dark: "#052e2b", light: "#ffffff" },
-  });
+function uint32(value) {
+  return Uint8Array.of(
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  );
+}
+
+function concatBytes(...parts) {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data = new Uint8Array()) {
+  const typeBytes = new TextEncoder().encode(type);
+  const body = concatBytes(typeBytes, data);
+  return concatBytes(uint32(data.length), body, uint32(crc32(body)));
+}
+
+async function deflate(bytes) {
+  const compressed = new Blob([bytes])
+    .stream()
+    .pipeThrough(new CompressionStream("deflate"));
+  return new Uint8Array(await new Response(compressed).arrayBuffer());
+}
+
+export async function renderQrisPng(payload) {
+  const qr = QRCode.create(payload, { errorCorrectionLevel: "M" });
+  const moduleCount = qr.modules.size;
+  const margin = 4;
+  const scale = 8;
+  const width = (moduleCount + margin * 2) * scale;
+  const rows = new Uint8Array((width + 1) * width);
+  rows.fill(255);
+
+  for (let y = 0; y < width; y += 1) {
+    const rowStart = y * (width + 1);
+    rows[rowStart] = 0;
+    const moduleY = Math.floor(y / scale) - margin;
+    if (moduleY < 0 || moduleY >= moduleCount) continue;
+
+    for (let x = 0; x < width; x += 1) {
+      const moduleX = Math.floor(x / scale) - margin;
+      if (
+        moduleX >= 0 &&
+        moduleX < moduleCount &&
+        qr.modules.get(moduleX, moduleY)
+      ) {
+        rows[rowStart + x + 1] = 0;
+      }
+    }
+  }
+
+  const ihdr = new Uint8Array(13);
+  ihdr.set(uint32(width), 0);
+  ihdr.set(uint32(width), 4);
+  ihdr[8] = 8;
+  ihdr[9] = 0;
+  const signature = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10);
+  return concatBytes(
+    signature,
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", await deflate(rows)),
+    pngChunk("IEND"),
+  );
 }
 
 async function handleQrisApi(request, env, dynamic) {
