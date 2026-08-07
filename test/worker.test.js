@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   convertToDynamic,
   formatTelegramMessage,
+  renderQrisPng,
   verifyGatePaySignature,
   verifyInternalSecret,
 } from "../worker/index.js";
@@ -51,4 +52,15 @@ test("converts a static QRIS payload to a dynamic amount", () => {
 test("rejects dynamic amounts outside the configured range", () => {
   assert.throws(() => convertToDynamic(STATIC_QRIS, 999), /invalid_amount/);
   assert.throws(() => convertToDynamic(STATIC_QRIS, 1_000_001), /invalid_amount/);
+});
+
+test("renders QRIS as a PNG using Web APIs", async () => {
+  const png = await renderQrisPng(STATIC_QRIS);
+
+  assert.deepEqual(
+    Array.from(png.slice(0, 8)),
+    [137, 80, 78, 71, 13, 10, 26, 10],
+  );
+  assert.equal(new TextDecoder().decode(png.slice(12, 16)), "IHDR");
+  assert.ok(png.byteLength > 100);
 });
