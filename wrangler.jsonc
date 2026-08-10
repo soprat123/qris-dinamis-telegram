@@ -22,6 +22,7 @@
     "head_sampling_rate": 1
   },
   "vars": {
-    "BIKIN_FOTO_URL": "https://bikin-foto.merapatsoprat.workers.dev"
+    "BIKIN_FOTO_URL": "https://bikin-foto.merapatsoprat.workers.dev",
+    "AICHATAPI_URL": "https://aichatapi.web.id"
   }
 }
