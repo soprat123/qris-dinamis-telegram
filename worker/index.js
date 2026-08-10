@@ -301,13 +301,15 @@ function formatPaidAt(unixSeconds) {
 export function formatTelegramMessage(event, settlement = {}) {
   const reference = event.reference ? String(event.reference) : "-";
   const user = settlement.user || {};
+  const websitePayment = /^web:/i.test(reference);
   const username = user.username ? `@${String(user.username).replace(/^@/, "")}` : "-";
   const telegramId = user.telegram_id ? String(user.telegram_id) : "-";
   return [
     "✅ Transaksi QRIS berhasil",
     "",
-    `Username: ${username}`,
-    `ID Telegram: ${telegramId}`,
+    `Sumber: ${websitePayment ? "AIChatAPI Web" : "Telegram"}`,
+    `Pengguna: ${websitePayment ? (user.name || "-") : username}`,
+    `${websitePayment ? "Email" : "ID Telegram"}: ${websitePayment ? (user.email || "-") : telegramId}`,
     `Order: ${String(event.order_id)}`,
     `Referensi: ${reference}`,
     `Nominal: Rp${formatRupiah(event.unique_amount)}`,
@@ -444,14 +446,21 @@ async function createGatePayOrder(request, env) {
 
   const amount = Number(input.base_amount);
   const reference = String(input.reference || "");
+  const source = String(input.source || "telegram").slice(0, 32);
   const username = String(input.username || "").replace(/^@/, "").slice(0, 64);
   const firstName = String(input.first_name || "").slice(0, 80);
   const telegramId = String(input.telegram_id || "").slice(0, 32);
-  const displayUser = username ? `@${username}` : (firstName || "-");
+  const accountName = String(input.account_name || "").replace(/[\r\n]/g, " ").slice(0, 80);
+  const accountEmail = String(input.account_email || "").replace(/[\r\n]/g, "").slice(0, 120);
+  const displayUser = source === "aichatapi"
+    ? (accountName || accountEmail || "-")
+    : (username ? `@${username}` : (firstName || "-"));
   if (!Number.isSafeInteger(amount) || amount < 1_000 || amount > 1_000_000) {
     return json({ ok: false, error: "invalid_amount" }, 400);
   }
-  if (!/^deposit:\d+:\d+$/.test(reference)) {
+  const telegramReference = /^deposit:\d+:\d+$/.test(reference);
+  const websiteReference = /^web:[0-9a-f-]{36}$/i.test(reference);
+  if (!telegramReference && !websiteReference) {
     return json({ ok: false, error: "invalid_reference" }, 400);
   }
 
@@ -508,7 +517,9 @@ async function createGatePayOrder(request, env) {
           "🟡 Transaksi QRIS pending",
           "",
           `Pengguna: ${displayUser}`,
+          `Sumber: ${websiteReference ? "AIChatAPI Web" : "Telegram"}`,
           `ID Telegram: ${telegramId || "-"}`,
+          `Email: ${accountEmail || "-"}`,
           `Order: ${order.id}`,
           `Referensi: ${reference}`,
           `Nominal saldo: Rp${formatRupiah(order.base_amount)}`,
@@ -531,9 +542,11 @@ async function createGatePayOrder(request, env) {
 }
 
 async function forwardPaidEvent(env, event) {
-  if (!env.BIKIN_FOTO_URL || !env.QRIS_INTERNAL_SECRET) throw new Error("internal_forward_not_configured");
-  const target = new URL("/internal/payment-paid", env.BIKIN_FOTO_URL);
-  if (target.protocol !== "https:") throw new Error("invalid_bikin_foto_url");
+  const websitePayment = /^web:/i.test(String(event.reference || ""));
+  const destination = websitePayment ? env.AICHATAPI_URL : env.BIKIN_FOTO_URL;
+  if (!destination || !env.QRIS_INTERNAL_SECRET) throw new Error("internal_forward_not_configured");
+  const target = new URL("/internal/payment-paid", destination);
+  if (target.protocol !== "https:") throw new Error("invalid_payment_destination");
 
   const response = await fetch(target, {
     method: "POST",
@@ -556,7 +569,7 @@ async function forwardPaidEvent(env, event) {
   } catch {
     // Status HTTP tetap diperiksa di bawah.
   }
-  if (!response.ok) throw new Error(`bikin_foto_http_${response.status}`);
+  if (!response.ok) throw new Error(`payment_destination_http_${response.status}`);
   return result;
 }
 
