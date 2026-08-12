@@ -201,9 +201,9 @@ export async function reserveUniqueAmount(env, baseAmount, orderId, expiresAt, n
          VALUES (?, ?, ?, ?)`,
       ).bind(candidate, orderId, expiresAt, now).run();
       return candidate;
-    } catch (error) {
+    } catch {
       if (attempt === attempts - 1) {
-        throw new GatewayError("unique_amount_unavailable", 503, { cause: error?.message || "collision" });
+        throw new GatewayError("unique_amount_unavailable", 503);
       }
     }
   }
@@ -279,7 +279,10 @@ export async function createInternalOrder(request, env, buildDynamicQris) {
       qrisPayload = await buildDynamicQris(String(env.QRIS_STATIC_PAYLOAD).trim(), uniqueAmount);
     } catch (error) {
       await releaseReservation(env, orderId);
-      throw new GatewayError(error?.message === "invalid_amount" ? "invalid_amount" : "invalid_static_qris", error?.message === "invalid_amount" ? 400 : 500);
+      throw new GatewayError(
+        error?.message === "invalid_amount" ? "invalid_amount" : "invalid_static_qris",
+        error?.message === "invalid_amount" ? 400 : 500,
+      );
     }
     const checkoutUrl = new URL(`/pay/${encodeURIComponent(orderId)}`, request.url).toString();
     try {
@@ -299,7 +302,10 @@ export async function createInternalOrder(request, env, buildDynamicQris) {
           `INSERT INTO payment_audit_logs
             (id, order_id, action, old_status, new_status, admin_id, metadata, created_at)
            VALUES (?, ?, 'order.created', NULL, 'pending', ?, ?, ?)`,
-        ).bind(createAuditId(), orderId, actor.id, JSON.stringify({ source: input.source, actor: actor.type }), now),
+        ).bind(
+          createAuditId(), orderId, actor.id,
+          JSON.stringify({ source: input.source, actor: actor.type }), now,
+        ),
       ]);
     } catch (error) {
       await releaseReservation(env, orderId);
@@ -307,10 +313,23 @@ export async function createInternalOrder(request, env, buildDynamicQris) {
     }
     return json({
       ok: true,
-      order: { id: orderId, provider: "internal", reference: input.reference, source: input.source,
-        base_amount: input.base_amount, unique_amount: uniqueAmount, currency: "IDR", status: "pending",
-        checkout_url: checkoutUrl, expires_at: expiresAt, expires_in: ttl, paid_at: null,
-        cancelled_at: null, created_at: now, updated_at: now },
+      order: {
+        id: orderId,
+        provider: "internal",
+        reference: input.reference,
+        source: input.source,
+        base_amount: input.base_amount,
+        unique_amount: uniqueAmount,
+        currency: "IDR",
+        status: "pending",
+        checkout_url: checkoutUrl,
+        expires_at: expiresAt,
+        expires_in: ttl,
+        paid_at: null,
+        cancelled_at: null,
+        created_at: now,
+        updated_at: now,
+      },
       cancel_token: cancelToken,
     }, 201);
   } catch (error) {
@@ -319,12 +338,20 @@ export async function createInternalOrder(request, env, buildDynamicQris) {
 }
 
 async function expireOne(env, order, now = nowSeconds()) {
-  if (!order || order.provider !== "internal" || order.status !== "pending" || order.expires_at == null || Number(order.expires_at) > now) return false;
+  if (
+    !order ||
+    order.provider !== "internal" ||
+    order.status !== "pending" ||
+    order.expires_at == null ||
+    Number(order.expires_at) > now
+  ) return false;
+
   return transitionPendingAtomic(env, {
     orderId: order.id,
     newStatus: "expired",
     updateSql: `UPDATE payment_orders SET status = 'expired', updated_at = ?
-      WHERE id = ? AND provider = 'internal' AND status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?`,
+      WHERE id = ? AND provider = 'internal' AND status = 'pending'
+      AND expires_at IS NOT NULL AND expires_at <= ?`,
     updateArgs: [now, String(order.id), now],
     auditAction: "order.expired",
     metadata: { reason: "ttl_elapsed" },
@@ -362,20 +389,28 @@ export async function cancelOrder(request, env, orderId) {
     const order = await findOrder(env, orderId);
     if (!order) throw new GatewayError("order_not_found", 404);
     if (order.provider !== "internal") throw new GatewayError("legacy_order_not_supported", 409);
-    if (order.status === "cancelled") return json({ ok: true, order: publicOrder(order), idempotent: true });
+    if (order.status === "cancelled") {
+      return json({ ok: true, order: publicOrder(order), idempotent: true });
+    }
     if (order.status === "paid") throw new GatewayError("order_already_paid", 409);
     if (order.status !== "pending") throw new GatewayError("order_not_pending", 409);
+
     const now = nowSeconds();
     if (order.expires_at != null && Number(order.expires_at) <= now) {
       await expireOne(env, order, now);
       throw new GatewayError("order_expired", 409);
     }
+
     if (!trusted) {
       const provided = request.headers.get("x-order-cancel-token") || input.cancel_token || "";
-      if (!order.cancel_token_hash || !(await constantTimeEqual(await sha256Hex(provided), order.cancel_token_hash))) {
+      if (
+        !order.cancel_token_hash ||
+        !(await constantTimeEqual(await sha256Hex(provided), order.cancel_token_hash))
+      ) {
         throw new GatewayError("unauthorized", 401);
       }
     }
+
     const changed = await transitionPendingAtomic(env, {
       orderId,
       newStatus: "cancelled",
@@ -400,12 +435,19 @@ export async function expirePendingOrders(env, now = nowSeconds(), limit = 100) 
       AND expires_at <= ? ORDER BY expires_at ASC LIMIT ?`,
   ).bind(now, Math.min(Math.max(Number(limit) || 100, 1), 500)).all();
   let expired = 0;
-  for (const order of rows?.results || []) if (await expireOne(env, order, now)) expired += 1;
+  for (const order of rows?.results || []) {
+    if (await expireOne(env, order, now)) expired += 1;
+  }
   return { expired };
 }
 
 export function errorResponse(error) {
-  if (error instanceof GatewayError) return json({ ok: false, error: error.code, ...error.details }, error.status);
-  console.error(JSON.stringify({ event: "internal_gateway_error", message: error?.message || "unknown_error" }));
+  if (error instanceof GatewayError) {
+    return json({ ok: false, error: error.code, ...error.details }, error.status);
+  }
+  console.error(JSON.stringify({
+    event: "internal_gateway_error",
+    message: error?.message || "unknown_error",
+  }));
   return json({ ok: false, error: "database_or_gateway_failure" }, 502);
 }
