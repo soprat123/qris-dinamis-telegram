@@ -6,6 +6,7 @@ import {
   createInternalOrder,
   errorResponse,
   expirePendingOrders,
+  findOrder,
   getOrderQrisPayload,
   getPublicOrder,
   json,
@@ -16,6 +17,10 @@ import {
   markOrderPaid,
   retryPaymentWebhook,
 } from "./internal-gateway-admin.js";
+import {
+  handleInternalTelegramCallback,
+  notifyPendingOrder,
+} from "./internal-telegram-admin.js";
 
 function decodeId(value) {
   try {
@@ -77,6 +82,17 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    if (url.pathname === "/webhook/telegram" && request.method === "POST") {
+      try {
+        const update = await request.clone().json();
+        if (String(update?.callback_query?.data || "").startsWith("qris_")) {
+          return handleInternalTelegramCallback(request, env, update);
+        }
+      } catch {
+        // Legacy Telegram handler below keeps the existing invalid JSON behavior.
+      }
+    }
+
     if (url.pathname === "/health" && request.method === "GET") {
       return json({
         ok: true,
@@ -84,6 +100,7 @@ export default {
         database: Boolean(env.DB),
         payment_engine: "internal",
         legacy_gatepay: true,
+        pending_telegram_alerts: Boolean(env.TELEGRAM_BOT_TOKEN),
       });
     }
 
@@ -137,11 +154,37 @@ export default {
     }
 
     if (url.pathname === "/api/orders" && request.method === "POST") {
-      return createInternalOrder(
+      const response = await createInternalOrder(
         request,
         env,
         (payload, amount) => convertToDynamic(payload, amount),
       );
+
+      if (response.ok && env.DB) {
+        try {
+          const body = await response.clone().json();
+          if (body?.ok && body.order?.id) {
+            const order = await findOrder(env, body.order.id);
+            if (order) {
+              const task = notifyPendingOrder(env, url.origin, order).catch((error) => {
+                console.error(JSON.stringify({
+                  event: "pending_order_admin_notification_failed",
+                  order_id: String(order.id),
+                  message: String(error?.message || "failed").slice(0, 160),
+                }));
+              });
+              if (ctx?.waitUntil) ctx.waitUntil(task);
+              else await task;
+            }
+          }
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: "pending_order_admin_notification_schedule_failed",
+            message: String(error?.message || "failed").slice(0, 160),
+          }));
+        }
+      }
+      return response;
     }
 
     // Everything that is not part of the new gateway continues through the
