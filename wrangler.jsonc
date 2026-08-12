@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "qris-dinamis-telegram",
-  "main": "./worker/index-d1.js",
+  "main": "./worker/internal-entry.js",
   "compatibility_date": "2026-08-06",
   "compatibility_flags": [
     "nodejs_compat",
@@ -14,6 +14,8 @@
       "/webhook/*",
       "/internal/*",
       "/api/*",
+      "/pay/*",
+      "/admin/*",
       "/health"
     ]
   },
@@ -24,12 +26,18 @@
       "database_id": "bc472603-565d-4ee4-89b1-4b5f0ba5a9de"
     }
   ],
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
   },
   "vars": {
     "BIKIN_FOTO_URL": "https://bikin-foto.merapatsoprat.workers.dev",
-    "AICHATAPI_URL": "https://aichatapi.web.id"
+    "AICHATAPI_URL": "https://aichatapi.web.id",
+    "INTERNAL_ORDER_TTL_SECONDS": "900"
   }
 }
