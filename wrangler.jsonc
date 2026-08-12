@@ -17,6 +17,13 @@
       "/health"
     ]
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "qris-payment-orders",
+      "database_id": "bc472603-565d-4ee4-89b1-4b5f0ba5a9de"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
