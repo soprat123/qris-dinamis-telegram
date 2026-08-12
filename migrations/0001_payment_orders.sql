@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS payment_orders (
   updated_at INTEGER NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_orders_reference
+CREATE INDEX IF NOT EXISTS idx_payment_orders_reference
   ON payment_orders(reference);
 
 CREATE INDEX IF NOT EXISTS idx_payment_orders_status_expires
